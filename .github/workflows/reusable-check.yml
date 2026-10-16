@@ -1,0 +1,144 @@
+name: Check
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit, branch or tag to check.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+env:
+  # The Anvil build the check project runs on; move it forward when the actions need a newer Anvil.
+  ANVIL_VERSION: dev-76abcd5
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Lint workflows
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 "$RUNNER_TEMP"
+          "$RUNNER_TEMP/actionlint" -color
+
+      - name: Lint scripts
+        run: shellcheck setup/*.sh .github/scripts/*.sh
+
+  # Runs the check project with an empty cache, so the actions must download everything and save it.
+  cold:
+    name: Empty cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - id: setup
+        uses: ./setup
+        with:
+          cache: read-write
+          key-prefix: check-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Expect an empty cache
+        if: steps.setup.outputs.downloads-hit == 'true' || steps.setup.outputs.workspaces-hit == 'true'
+        run: |
+          echo "::error::The run restored a cache although its key is new: ${{ steps.setup.outputs.key }}"
+          exit 1
+
+      - name: Run the scenarios
+        working-directory: .github/check
+        run: ./gradlew --no-daemon anvilTest
+
+      - name: Summarize
+        working-directory: .github/check
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/summarize.sh" "Empty cache"
+
+      - uses: ./report
+        if: failure()
+        with:
+          name: anvil-empty-cache
+
+  # Runs the check project again on the cache the first run saved.
+  warm:
+    name: Saved cache
+    needs: cold
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - id: setup
+        uses: ./setup
+        with:
+          cache: read-only
+          key-prefix: check-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Expect the saved cache
+        if: steps.setup.outputs.downloads-hit != 'true' || steps.setup.outputs.workspaces-hit != 'true'
+        run: |
+          echo "::error::The run did not restore what the first run saved under ${{ steps.setup.outputs.key }}"
+          exit 1
+
+      - name: Run the scenarios
+        working-directory: .github/check
+        run: ./gradlew --no-daemon anvilTest
+
+      - name: Summarize
+        working-directory: .github/check
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/summarize.sh" "Saved cache"
+
+      - uses: ./report
+        if: failure()
+        with:
+          name: anvil-saved-cache
+
+  # The caches of a check are only needed by the check itself.
+  clean:
+    name: Remove the check's caches
+    needs: [cold, warm]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Pull requests from forks cannot delete caches; theirs expire on their own.
+    continue-on-error: true
+    steps:
+      - name: Delete caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFIX: check-${{ github.run_id }}-${{ github.run_attempt }}-
+        run: |
+          set -euo pipefail
+          gh cache list -R "$GITHUB_REPOSITORY" --key anvil- --limit 100 --json id,key \
+            --jq ".[] | select(.key | contains(\"-$PREFIX\")) | .id" |
+            while read -r id; do gh cache delete -R "$GITHUB_REPOSITORY" "$id"; done

@@ -1,0 +1,98 @@
+name: Set up Anvil
+description: Restore and save the servers, protocol libraries, Java runtimes and prepared workspaces Anvil downloads
+
+inputs:
+  cache:
+    description: >-
+      Cache policy: auto, read-write or read-only. With auto, runs on the default branch write the cache and every
+      other run only reads it, so pull requests start from what the default branch left.
+    required: false
+    default: auto
+  key-prefix:
+    description: >-
+      Separates the caches of jobs that start different servers, such as the suites of a matrix. Jobs with the same
+      prefix share one cache, and the first of them to finish saves it.
+    required: false
+    default: ""
+  key-files:
+    description: >-
+      Newline-separated globs of the files that decide which servers a run needs. A change to any of them starts a
+      new cache.
+    required: false
+    default: |
+      **/*.gradle.kts
+      **/*.gradle
+      **/gradle.properties
+      **/gradle/*.versions.toml
+  directory:
+    description: Anvil's cache directory, the engine's cacheDirectory in the Gradle build.
+    required: false
+    default: ~/.anvil
+
+outputs:
+  key:
+    description: Cache key this run restores and saves under.
+    value: ${{ steps.key.outputs.key }}
+  downloads-hit:
+    description: Whether the servers, protocol libraries and Java runtimes came from a cache of the same key.
+    value: ${{ steps.restore-downloads.outputs.cache-hit || steps.cache-downloads.outputs.cache-hit || 'false' }}
+  workspaces-hit:
+    description: Whether the prepared workspaces came from a cache of the same key.
+    value: ${{ steps.restore-workspaces.outputs.cache-hit || steps.cache-workspaces.outputs.cache-hit || 'false' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Decide cache policy and key
+      id: key
+      shell: bash
+      env:
+        POLICY: ${{ inputs.cache }}
+        PREFIX: ${{ inputs.key-prefix }}
+        KEY_FILES: ${{ inputs.key-files }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: bash "$GITHUB_ACTION_PATH/key.sh"
+
+    # Servers, protocol libraries and Java runtimes only grow when a build asks for new versions, so a run may start
+    # from an older cache and add what it is missing.
+    - name: Restore downloads
+      id: restore-downloads
+      if: steps.key.outputs.read-only == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          ${{ inputs.directory }}/distributions
+          ${{ inputs.directory }}/protocol
+          ${{ inputs.directory }}/java
+        key: anvil-downloads-${{ steps.key.outputs.key }}
+        restore-keys: anvil-downloads-${{ steps.key.outputs.scope }}-
+
+    - name: Restore and save downloads
+      id: cache-downloads
+      if: steps.key.outputs.read-only != 'true'
+      uses: actions/cache@v6
+      with:
+        path: |
+          ${{ inputs.directory }}/distributions
+          ${{ inputs.directory }}/protocol
+          ${{ inputs.directory }}/java
+        key: anvil-downloads-${{ steps.key.outputs.key }}
+        restore-keys: anvil-downloads-${{ steps.key.outputs.scope }}-
+
+    # A workspace snapshot is kept for every server configuration a run started. Restoring them only from the same
+    # key keeps snapshots of configurations that no longer exist out of the cache.
+    - name: Restore workspaces
+      id: restore-workspaces
+      if: steps.key.outputs.read-only == 'true'
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ inputs.directory }}/workspaces
+        key: anvil-workspaces-${{ steps.key.outputs.key }}
+
+    - name: Restore and save workspaces
+      id: cache-workspaces
+      if: steps.key.outputs.read-only != 'true'
+      uses: actions/cache@v6
+      with:
+        path: ${{ inputs.directory }}/workspaces
+        key: anvil-workspaces-${{ steps.key.outputs.key }}
