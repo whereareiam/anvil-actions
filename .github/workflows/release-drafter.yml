@@ -23,11 +23,26 @@ jobs:
         with:
           ref: dev
           persist-credentials: false
+          fetch-depth: 0
+
+      # Without a published release the drafter has nothing to compare with and lists no changes, so the first draft
+      # starts at the first commit.
+      - name: Find the baseline of a first release
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          published="$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq '[.[] | select(.draft | not)] | length')"
+          if [[ "$published" == 0 ]]; then
+            echo "from=$(git rev-list --max-parents=0 HEAD)" >> "$GITHUB_OUTPUT"
+          fi
 
       - id: drafter
         uses: release-drafter/release-drafter@v7
         with:
           commitish: dev
+          from: ${{ steps.baseline.outputs.from }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
