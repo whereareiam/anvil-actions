@@ -1,0 +1,59 @@
+name: Bug report
+description: An action fails or does not do what the README says.
+labels:
+  - bug
+body:
+  - type: dropdown
+    id: action
+    attributes:
+      label: Action
+      options:
+        - setup
+        - report
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The ref in your workflow, for example `v1` or `v1.0.0`.
+    validations:
+      required: true
+
+  - type: input
+    id: anvil
+    attributes:
+      label: Anvil version
+      placeholder: 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: run
+    attributes:
+      label: Workflow run
+      description: A link to the run, if the repository is public.
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: The steps that use the action.
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The output of the failing step.
+      render: text

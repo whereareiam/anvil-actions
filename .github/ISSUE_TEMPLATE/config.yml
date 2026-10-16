@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A problem with Anvil itself
+    url: https://github.com/whereareiam/anvil/issues
+    about: Servers, players or scenarios that misbehave belong to Anvil.
+  - name: Anvil documentation
+    url: https://anvil.whereareiam.me
+    about: Writing scenarios and running them with Gradle.
