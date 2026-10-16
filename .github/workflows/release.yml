@@ -1,0 +1,77 @@
+name: Release
+run-name: "Release ${{ github.event.release.tag_name }}"
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      major: ${{ steps.release.outputs.major }}
+    steps:
+      - name: Read release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
+          if jq -e '(.body // "") | contains("[Short subtitle]") or contains("[1-2 sentence summary")' <<<"$release" >/dev/null; then
+            echo "::error::Release $TAG still has the subtitle or summary placeholder of the draft; fill in .github/release-notes.md or edit the release, then publish again."
+            exit 1
+          fi
+          [[ "$TAG" =~ ^v([0-9]+)\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Release tag $TAG is not vMAJOR.MINOR.PATCH" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "major=v${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Check
+    needs: resolve
+    permissions:
+      contents: read
+      actions: write
+    uses: ./.github/workflows/reusable-check.yml
+    with:
+      ref: ${{ needs.resolve.outputs.tag }}
+
+  # Workflows that use @v1 pick the release up once the major tag points at it.
+  major:
+    name: Move ${{ needs.resolve.outputs.major }}
+    needs: [resolve, check]
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Point the major tag at the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          MAJOR: ${{ needs.resolve.outputs.major }}
+        run: |
+          set -euo pipefail
+          object="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object')"
+          sha="$(jq -r '.sha' <<<"$object")"
+          if [[ "$(jq -r '.type' <<<"$object")" == tag ]]; then
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.object.sha')"
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$MAJOR" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$MAJOR" -f sha="$sha" -F force=true >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$MAJOR" -f sha="$sha" >/dev/null
+          fi
+          echo "$MAJOR now points at $TAG ($sha)" >> "$GITHUB_STEP_SUMMARY"

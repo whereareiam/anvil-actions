@@ -1,0 +1,38 @@
+name: Report Anvil scenarios
+description: Upload the test results and the console logs of the processes Anvil kept after a failed scenario
+
+inputs:
+  name:
+    description: >-
+      Artifact name. Jobs of one run need different names, so each job of a matrix passes its own, such as
+      anvil-join for a suite named join.
+    required: false
+    default: anvil-${{ github.job }}
+  path:
+    description: Newline-separated paths and globs to upload.
+    required: false
+    default: |
+      **/build/test-results/**/*.xml
+      **/build/reports/tests/**
+      **/build/anvil/**/anvil-console.log
+  retention-days:
+    description: Days GitHub keeps the artifact.
+    required: false
+    default: "7"
+
+outputs:
+  artifact-url:
+    description: Address of the uploaded artifact, empty when nothing was found.
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Upload test results and console logs
+      id: upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: ignore
